@@ -4,11 +4,11 @@ learning basic Koa + mongo stack and Testing
 
 ## General
 
-The idea is to have an interactive billboard project, with the following routes : 
+The idea is to have an interactive Bulletin Board project, with the following routes : 
 
 * /user
 * /building
-* /billboard
+* /bulletin
 
 ## Deployment
 
