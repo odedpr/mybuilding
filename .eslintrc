@@ -1,0 +1,44 @@
+{
+    "env": {
+        "es6": true,
+        "node": true,
+        "browser": true
+    },
+    "globals": {
+        "angular": true,
+        "_":true,
+        "test":true,
+        "describe":true,
+        "beforeEach":true,
+        "afterEach":true,
+        "after":true,
+        "before":true,
+        "it":true,
+        "$":true,
+        "suite":true,
+        "expect":true
+    },
+    "extends": "eslint:recommended",
+    "parserOptions": {
+        "sourceType": "module"
+    },
+    "rules": {
+        "indent": [
+            "error",
+            2
+        ],
+        "linebreak-style": [
+            "error",
+            "unix"
+        ],
+        "quotes": [
+            "error",
+            "single"
+        ],
+        "semi": [
+            "error",
+            "always"
+        ],
+        "no-console": 0
+    }
+}

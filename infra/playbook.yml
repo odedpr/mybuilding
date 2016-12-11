@@ -1,0 +1,13 @@
+---
+- hosts: localhost
+  vars:
+     branch: "{{ branch }}"
+     component: "{{ component }}"
+     docker_swarm_manager_ip: "10.0.0.139:2375"
+     docker_new_image: "{{docker_new_image}}"
+     git_commit: "{{git_commit}}"
+  tasks:
+    - name: updating service
+      shell: docker -H tcp://{{docker_swarm_manager_ip}} service update {{component}} --env-add GIT_COMMIT={{git_commit}} --image {{docker_new_image}}
+
+

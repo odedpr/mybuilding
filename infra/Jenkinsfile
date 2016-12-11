@@ -1,0 +1,118 @@
+import groovy.json.JsonOutput
+def notifySlack(text, channel) {
+    def slackURL = 'https://hooks.slack.com/services/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'
+    def payload = JsonOutput.toJson([text  : text,
+                                    channel   : channel,
+                                    username  : "jenkins",
+                                    icon_emoji: ":jenkins:"])
+    sh "curl -X POST --data-urlencode \'payload=${payload}\' ${slackURL}"
+}
+
+node('compliance-util'){
+    try {
+        notifySlack("STARTING ${env.JOB_NAME} ${env.BUILD_NUMBER}","#compliance-deployment")
+
+        stage 'CHECKOUT'
+        deleteDir()
+        env.GIT_REPO='rproxy.ironsrc.com/scm/infra-av/complianceskeleton.git'
+        git branch: '**', credentialsId: 'cbca8cd9-3e58-4eb0-864e-1df1fbfee4f0', url: "https://${env.GIT_REPO}"
+
+        stage 'SET ENVIRONMENT VARIABLES'
+            withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'cbca8cd9-3e58-4eb0-864e-1df1fbfee4f0', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD']]) {
+                sh '''
+                    echo env.GIT_USERNAME=${GIT_USERNAME} > env.properties
+                    echo env.GIT_PASSWORD=${GIT_PASSWORD} >> env.properties
+                    echo env.GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) >> env.properties
+                    echo env.ORIGINAL_BRANCH=$(git rev-parse --abbrev-ref HEAD) >> env.properties
+                    echo env.GIT_COMMIT=$(git rev-parse HEAD) >> env.properties
+                    cat env.properties
+                '''
+            }
+
+            sh '''
+                sed 's/$/"/g' -i env.properties
+                sed 's/=/="/g' -i env.properties
+            '''
+
+            sh 'cat infra/jenkins-env-variables.groovy >> env.properties'
+
+            load ('env.properties') 
+            env.timestamp=(new Date()).toTimestamp().getTime()
+            def swagger = fileExists 'swagger.yml'
+
+        stage 'MERGE TO STAGING'
+            if (env.GIT_BRANCH =~ /^(feature)/) {
+                sh '''
+                    git config user.name 'ci.infra'
+                    git config user.email 'ci.infra@ironsource.com'
+                    git checkout staging
+                    git merge ${GIT_BRANCH}
+                    echo env.GIT_COMMIT=$(git rev-parse HEAD) > merge.properties
+                    echo env.GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) >> merge.properties
+                    sed 's/$/"/g' -i merge.properties
+                    sed 's/=/="/g' -i merge.properties
+                '''
+                load ('merge.properties')
+            } else {
+               echo 'no need to merge to staging'
+            }
+
+        stage 'BUILDING DOCKER IMAGE'
+            env.IMAGE_NAME = env.DOCKER_REPO + ":" + env.GIT_BRANCH
+            sh '''
+                 docker build --label GIT_BRANCH=${GIT_BRANCH} --label GIT_COMMIT=${GIT_COMMIT} --label BUILD_ID=${BUILD_ID} -t ${IMAGE_NAME} .
+             '''
+
+        stage 'RUN UNIT TESTS ON STAGING IMAGE'
+            sh '''
+                test_container_name=${COMPONENT}-${timestamp}
+
+                docker run -i --name ${test_container_name} ${IMAGE_NAME} npm run test-with-cover || echo test failed
+                docker cp ${test_container_name}:/usr/src/app/artifacts/ . || echo no file found
+                docker rm ${test_container_name}
+
+            '''
+
+        stage 'PUSH IMAGE TO REGISTRY'
+            sh '''
+                set +x
+                docker tag ${IMAGE_NAME} ${DOCKER_REPO}:${GIT_COMMIT}
+                docker tag ${IMAGE_NAME} ${DOCKER_REPO}:${GIT_BRANCH}
+                docker push ${DOCKER_REPO}:${GIT_COMMIT}
+                docker push ${DOCKER_REPO}:${GIT_BRANCH}
+            '''
+
+        stage 'PUBLISH CONTAINER'
+            sh '''
+                set +x
+                ansible-playbook infra/playbook.yml --connection=local -e "git_commit=${GIT_COMMIT}" -e "docker_new_image=${DOCKER_REPO}:${GIT_COMMIT}" -e "branch=${GIT_BRANCH}" -e "component=${COMPONENT}" -u ubuntu
+            '''
+
+        stage 'POST BUILD'
+            step([$class: 'JUnitResultArchiver', testResults: 'artifacts/test/xunit.xml'])
+            publishHTML(target: [alwaysLinkToLastBuild: false, keepAll: true, reportDir: 'artifacts/coverage/lcov-report', reportFiles: 'index.html', reportName: 'Coverage Report'])
+            if (swagger) {
+                sh '''
+                    set +x
+                    aws s3 cp swagger.yml ${SWAGGER_BUCKET}/${COMPONENT}.yml
+                '''
+            }
+
+        withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'cbca8cd9-3e58-4eb0-864e-1df1fbfee4f0', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD']]) {
+            if (env.ORIGINAL_BRANCH =~ /^(feature)/ ) {
+                sh '''
+                    git push https://${GIT_USERNAME}:${GIT_PASSWORD}@${GIT_REPO}
+                '''
+            }
+        }
+
+        currentBuild.result = 'SUCCESS'
+        notifySlack("${currentBuild.result} ${env.JOB_NAME} ${env.BUILD_NUMBER}","#compliance-deployment")
+    } catch(err){
+        currentBuild.result = 'FAILURE'
+        notifySlack("${currentBuild.result} ${env.JOB_NAME} ${env.BUILD_NUMBER}","#compliance-deployment")
+        throw err
+    }
+}
+
+
